@@ -1,0 +1,377 @@
+package main
+
+import (
+	"bufio"
+	"encoding/csv"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"slices"
+
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+const (
+	progressBarWidth  = 71
+	progressFullChar  = "█"
+	progressEmptyChar = "░"
+	dotChar           = " • "
+)
+
+var (
+	keywordStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("211"))
+	subtleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	ticksStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("79"))
+	checkboxStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	progressEmpty      = subtleStyle.Render(progressEmptyChar)
+	dotStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(dotChar)
+	mainStyle          = lipgloss.NewStyle().MarginLeft(2)
+	focusedWindowStyle = lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("63"))
+	modelStyle         = lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder())
+)
+
+// Model of the application state
+type model struct {
+	// Application state
+	logs          []Log
+	currentLogIdx int
+
+	// UI specific fields
+	x             int
+	y             int
+	logTable      table.Model
+	sourcesView   viewport.Model
+	currentWindow int // 0 is logs, 1 is sources
+	progress      int
+	quit          bool
+}
+
+type Log struct {
+	Time    time.Time
+	Service string
+	Message string
+	Sources []Source
+}
+
+type Source struct {
+	Path string
+	Line int
+}
+
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	// Use the log table cursor as the source of truth for the current log index
+	if m.currentWindow == 0 {
+		m.logTable, cmd = m.logTable.Update(msg)
+	}
+
+	switch msg := msg.(type) {
+	case logProcessingMsg:
+		m.progress = msg.Progress
+		m.logs = msg.Logs
+		m.logTable = msg.LogTable
+		m.logTable.KeyMap.HalfPageDown.SetEnabled(false)
+		return m, nil
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		// Switch between logs and sources
+		case "tab", "shift+tab":
+			if m.currentWindow == 1 {
+				m.currentWindow = 0
+			} else {
+				m.currentWindow = 1
+			}
+
+		// Delete log from records
+		case "d", "delete", "backspace":
+			if len(m.logs) > 1 && m.currentWindow == 0 {
+				m.logs = slices.Delete(m.logs, m.logTable.Cursor(), m.logTable.Cursor()+1)
+				if m.logTable.Cursor() >= len(m.logs) && len(m.logs) > 0 {
+					m.logTable.SetCursor(len(m.logs) - 1)
+				} else if len(m.logs) == 0 {
+					return nil, tea.Quit
+				}
+				m.logTable.SetRows(slices.Delete(m.logTable.Rows(), m.logTable.Cursor(), m.logTable.Cursor()+1))
+				m.sourcesView.SetContent(m.logs[m.logTable.Cursor()].Sources[0].Path)
+			}
+
+		// Open log info or source in user's editor
+		case "o", "enter":
+			// Open Log
+			if m.currentWindow == 0 {
+
+			}
+			// Open Source code
+			if m.currentWindow == 1 {
+
+			}
+
+		// Quit
+		case "ctrl+c", "q":
+			m.quit = true
+			return m, tea.Quit
+		default:
+			m.sourcesView.SetContent(m.logs[m.logTable.Cursor()].Sources[0].Path)
+		}
+
+	case tea.WindowSizeMsg:
+		m.x, m.y = msg.Width, msg.Height
+	}
+
+	return m, cmd
+
+}
+
+func (m model) View() string {
+	if m.progress < 100 {
+		return renderPrettySpinner(m)
+	}
+	var s string
+	header := keywordStyle.Render("VLSA - Visual Log Source Analyzer")
+
+	if m.currentWindow == 0 {
+		s += lipgloss.JoinVertical(lipgloss.Top, header, lipgloss.JoinHorizontal(lipgloss.Top, focusedWindowStyle.Render(renderLogs(m)), modelStyle.Render(renderSources(m))))
+	} else {
+		s += lipgloss.JoinVertical(lipgloss.Top, header, lipgloss.JoinHorizontal(lipgloss.Top, modelStyle.Render(renderLogs(m)), focusedWindowStyle.Render(renderSources(m))))
+	}
+
+	return s
+}
+
+func renderPrettySpinner(m model) string {
+	return "Loading logs..." + strconv.Itoa(m.progress) + "%\n"
+}
+
+func renderLogs(m model) string {
+	m.logTable.SetWidth((m.x / 2) - 2)
+	m.logTable.SetHeight(m.y - 3)
+
+	lw := m.x / 2
+	columns := []table.Column{
+		{Title: "Timestamp", Width: 10},
+		{Title: "Log", Width: lw - 10},
+	}
+	m.logTable.SetColumns(columns)
+	return m.logTable.View() + "\n"
+}
+
+func renderSources(m model) string {
+	m.sourcesView.Width = (m.x / 2) - 2
+	m.sourcesView.Height = m.y - 3
+	return m.sourcesView.View()
+}
+
+func main() {
+	model := model{
+		logs:          nil,
+		progress:      0,
+		quit:          false,
+		currentWindow: 0, // Start with logs window
+	}
+
+	model.sourcesView = viewport.New(10, 10)
+	model.sourcesView.SetContent("No sources available")
+
+	p := tea.NewProgram(model)
+
+	go func() {
+		processLogs(p)
+		for {
+		}
+	}()
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)
+		os.Exit(1)
+	}
+
+}
+
+func processLogs(p *tea.Program) {
+	// If a log file is provided, open it and read the logs
+	if len(os.Args) > 1 {
+		logFile := os.Args[1]
+		file, err := os.Open(logFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening log file: %v\n", err)
+			os.Exit(1)
+		}
+		defer file.Close()
+
+		// If the file is a csv, parse it out with the csv package else, just plain text
+		logs := []Log{}
+		if logFile[len(logFile)-4:] == ".csv" {
+			// Parse CSV file
+			csvReader := csv.NewReader(file)
+			records, err := csvReader.ReadAll()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading CSV file: %v\n", err)
+				os.Exit(1)
+			}
+
+			for i, record := range records {
+				if len(record) < 2 {
+					continue // Skip malformed lines
+				}
+
+				// Time is provided as 2025-06-19T03:40:54.794Z
+				time, err := time.Parse("2006-01-02T15:04:05.000Z", record[0])
+				if err != nil {
+					// fmt.Fprintf(os.Stderr, "Error parsing timestamp: %v\n", err)
+					continue
+				}
+				l := Log{
+
+					Time:    time,
+					Service: record[2],
+					Message: record[3],
+					Sources: []Source{{
+						Path: record[3],
+						Line: 0,
+					}}, // Add sources if available
+				}
+
+				// Searching the source files for the message
+				// If the message is just a JSON object, we should skip it unless there's a message inside.
+				// Trim the message to any colon so we don't search for formatted strings either
+				// This is a simple heuristic, but it should work for most cases
+
+				l.Message = strings.TrimSpace(strings.Split(l.Message, ":")[0])
+				m := ""
+				openBraceCount := 0
+				for _, c := range l.Message {
+					if c == '{' {
+						openBraceCount++
+						continue
+					}
+					if c == '}' {
+						openBraceCount--
+						continue
+					}
+					if openBraceCount == 0 {
+						m = m + string(c)
+					}
+				}
+				m = strings.TrimSpace(m)
+
+				// Search for source files in the current directory and subdirectories
+				if m != "" {
+					cmd := exec.Command("rg", "-F", fmt.Sprintf("\"%s\"", m))
+
+					fmt.Printf("Running command: %s\n", cmd.String())
+
+					out, err := cmd.Output()
+					if err != nil {
+						// fmt.Fprintf(os.Stderr, "Error running command: %v\n%s", err, string(out))
+						if strings.Contains(err.Error(), "exit status 1") {
+							// This is expected if no matches are found, so we can ignore it
+							continue
+						} else {
+							fmt.Fprintf(os.Stderr, "Error running command: %v\n%s", err, string(out))
+							os.Exit(1)
+						}
+					}
+
+					// Split the output into lines
+					lines := string(out)
+					scanner := bufio.NewScanner(strings.NewReader(lines))
+					for scanner.Scan() {
+						// line := scanner.Text()
+						// Assuming the output is in the format "path\nline_number: content"
+
+						logs = append(logs, l)
+
+						// Update progress
+						p.Send(logProcessingMsg{
+							Progress: i / len(records) * 80,
+						})
+					}
+				}
+			}
+		} else {
+			// Read plain text logs
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				line := scanner.Text()
+				logs = append(logs, Log{
+					Time:    time.Now(), // Use current time for simplicity
+					Message: line,
+					Sources: []Source{{
+						Path: line,
+						Line: 0,
+					}}, // Add sources if available
+				})
+			}
+			if err := scanner.Err(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading log file: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+		// Convert to table rows
+		var rows []table.Row
+		for _, log := range logs {
+			row := table.Row{
+				fmt.Sprintf("%v", log.Time),
+				log.Message,
+			}
+			rows = append(rows, row)
+
+		}
+		columns := []table.Column{
+			{Title: "Timestamp", Width: 10},
+			{Title: "Log", Width: 20},
+		}
+
+		// Create table
+		t := table.New(
+			table.WithColumns(columns),
+			table.WithRows(rows),
+			table.WithFocused(true),
+			table.WithWidth(30),
+		)
+
+		s := table.DefaultStyles()
+		s.Header = s.Header.
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			BorderBottom(true).
+			Bold(false)
+		s.Selected = s.Selected.
+			Foreground(lipgloss.Color("229")).
+			Background(lipgloss.Color("57")).
+			Bold(false)
+		t.SetStyles(s)
+
+		p.Send(logProcessingMsg{
+			Progress: 100,
+			Logs:     logs,
+			LogTable: t,
+		})
+		return
+
+	}
+	p.Send(logProcessingMsg{
+		Progress: 100,
+		Logs:     []Log{},
+		LogTable: table.New(table.WithColumns([]table.Column{{Title: "Timestamp", Width: 10}, {Title: "Log", Width: 20}}), table.WithRows([]table.Row{{"", "Please provide a log file"}}), table.WithFocused(true), table.WithWidth(30)),
+	})
+}
+
+type logProcessingMsg struct {
+	Progress int
+	Logs     []Log
+	LogTable table.Model
+}
