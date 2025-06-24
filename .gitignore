@@ -5,6 +5,7 @@
 *.so
 *.dylib
 lsa
+vlsa
 
 # Test binary, built with `go test -c`
 *.test
@@ -45,4 +46,4 @@ dist/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
+Thumbs.dbvlsa

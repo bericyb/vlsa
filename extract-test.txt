@@ -1,0 +1,8 @@
+Date,Host,Service,Message
+"2025-06-19T03:39:21.231Z","i-04f63347e7593aa7e","pi","Failed to get user by filters"
+"2025-06-19T03:39:20.641Z","i-03b1e67541586305f","pi","CacheHelper: error reading pi_vialto/feature_idp_settings_ui: unserialize(): Error at offset 0 of 2 bytes"
+"2025-06-19T03:39:18.554Z","i-0795fdc94e916c28d","gw","Failed to get user by identifier from identity"
+"2025-06-19T03:39:18.016Z","i-012e5648d76e9e378","sensor","{""filename"":""crates/engine/src/rules/rule_engine.rs"",""level"":""WARN"",""line_number"":1482,""fields"":{""rule_id"":""sen-id-228"",""sighash"":""3be07e1a"",""message"":""real rule was found"",""desc"":""""},""timestamp"":""2025-06-19T03:39:18.016963659+00:00"",""target"":""sensor::rules::rule_engine"",""sensor_metadata"":{""tenant_id"":""1823ba31-ff1d-46f7-be40-9a4b99f2768d"",""start_time"":""2025-06-18T09:44:35Z"",""os"":""unix"",""apisec"":{""env_enabled"":false},""vm"":{""dmi_uuid"":""ec2997cc-3632-c934-0ea5-54f9d3f1b466"",""persistent_id"":""169eb2cf-dc6b-4aad-a62e-3de2a8071053"",""cloud_id"":""i-012e5648d76e9e378""},""defs_ver"":""1.0.3384"",""granular_type"":""container"",""sensor_type"":""vm"",""binary_ver"":""1.0.5835"",""machine_nodename"":""ip-10-20-2-25"",""oper_mode"":""engine""}}"
+"2025-06-19T03:39:17.370Z","i-0f67044a19231ca64","ofn-gw","error reading message, closing websocket connection: read tcp 192.168.138.248:80->192.168.142.176:37632: use of closed network connection"
+"2025-06-19T03:39:17.231Z","i-0c40e6e218cfda555","agent-api","received job exchange message: JOB_EXCHANGE_MESSAGE_TYPE_UNSPECIFIED"
+"2025-06-19T03:39:17.231Z","i-03b1e67541586305f","gw","Failed to get user by identifier from identity"
