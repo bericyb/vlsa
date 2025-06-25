@@ -14,10 +14,11 @@ import (
 )
 
 type Log struct {
-	Time    time.Time
-	Service string
-	Message string
-	Sources []SourceMapping
+	Time              time.Time
+	Service           string
+	Message           string
+	Sources           []SourceMapping
+	SelectedSourceIdx int // Track which source index is currently selected
 }
 
 type SourceMapping struct {

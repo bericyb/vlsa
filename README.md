@@ -34,6 +34,12 @@ Perfect for debugging production issues, analyzing Datadog exports, or understan
 - Quick navigation between logs and source views (`Tab`)
 - Timestamp parsing and display for temporal analysis
 
+### 🎯 **Multiple Source Selection**
+- When multiple source files match a log message, choose the correct one
+- Interactive source selector with keyboard navigation
+- Apply source selection to all similar log messages with one command
+- Three-pane layout when multiple sources are available
+
 ## Installation
 
 ### Prerequisites
@@ -87,10 +93,13 @@ Example CSV row:
 ### Keyboard Shortcuts
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Switch between logs and source code panes |
-| `↑` / `↓` | Navigate through log entries |
+| `Tab` / `Shift+Tab` | Switch between panes (logs, sources, source selector) |
+| `↑` / `↓` | Navigate through log entries or source options |
+| `s` | Show source selector (when multiple sources available) |
+| `Enter` | Select source (in selector) or open in editor (in source view) |
+| `a` | Apply selected source to all similar logs (in selector) |
+| `Esc` | Cancel source selection and return to source view |
 | `d` / `Delete` / `Backspace` | Remove current log entry |
-| `o` / `Enter` | Open log or source in external editor (planned) |
 | `q` / `Ctrl+C` | Quit application |
 
 ### Interface Layout

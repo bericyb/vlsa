@@ -12,6 +12,7 @@ import (
 	"vlsa/internal/bus"
 	"vlsa/internal/log"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,6 +38,17 @@ var (
 	modelStyle         = lipgloss.NewStyle().BorderStyle(lipgloss.HiddenBorder())
 )
 
+// SourceItem represents an item in the source selector list
+type SourceItem struct {
+	path string
+	line int
+	idx  int
+}
+
+func (s SourceItem) FilterValue() string { return s.path }
+func (s SourceItem) Title() string       { return fmt.Sprintf("%s:%d", s.path, s.line) }
+func (s SourceItem) Description() string { return "Source file location" }
+
 // Model of the application state
 type Model struct {
 	// Application state
@@ -44,13 +56,16 @@ type Model struct {
 	currentLogIdx int
 
 	// UI specific fields
-	x             int
-	y             int
-	logTable      table.Model
-	sourcesView   viewport.Model
-	currentWindow int // 0 is logs, 1 is sources
-	progress      int
-	quit          bool
+	x                  int
+	y                  int
+	logTable           table.Model
+	sourcesView        viewport.Model
+	sourceSelector     list.Model
+	selectedSourceIdx  int              // Track which source is selected for current log
+	showSourceSelector bool             // Whether to show the selector pane
+	currentWindow      int              // 0=logs, 1=sources, 2=selector
+	progress           int
+	quit               bool
 }
 
 func (m Model) Init() tea.Cmd {
@@ -59,10 +74,19 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	// Use the log table cursor as the source of truth for the current log index
-
-	if m.currentWindow == 0 {
+	
+	// Update the appropriate component based on current window
+	switch m.currentWindow {
+	case 0: // Logs table
 		m.logTable, cmd = m.logTable.Update(msg)
+		// Check if we need to update source selector when log changes
+		if len(m.logs) > 0 && m.logTable.Cursor() < len(m.logs) {
+			m.updateSourceSelector()
+		}
+	case 1: // Sources view
+		m.sourcesView, cmd = m.sourcesView.Update(msg)
+	case 2: // Source selector
+		m.sourceSelector, cmd = m.sourceSelector.Update(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -72,17 +96,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logs = msg.Logs
 			m.logTable = createLogTable(m.logs)
 			m.logTable.KeyMap.HalfPageDown.SetEnabled(false)
-			m.sourcesView = viewport.New(m.x/2-2, m.y-3)
+			m.sourcesView = viewport.New(m.getSourcesViewWidth(), m.y-3)
+			m.updateSourceSelector()
 		}
 		return m, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		// Switch between logs and sources
-		case "tab", "shift+tab":
-			if m.currentWindow == 1 {
-				m.currentWindow = 0
-			} else {
+		// Switch between panes
+		case "tab":
+			m.nextWindow()
+		case "shift+tab":
+			m.prevWindow()
+
+		// Source selector specific keys
+		case "enter":
+			if m.currentWindow == 2 && m.showSourceSelector {
+				// Select source and return to source view
+				if selectedItem, ok := m.sourceSelector.SelectedItem().(SourceItem); ok {
+					// Update the current log's selected source index
+					if m.logTable.Cursor() < len(m.logs) {
+						m.logs[m.logTable.Cursor()].SelectedSourceIdx = selectedItem.idx
+					}
+					m.showSourceSelector = false
+					m.currentWindow = 1 // Switch back to source view
+				}
+			} else if m.currentWindow == 1 {
+				// Open source in editor
+				m.openCurrentSourceInEditor()
+			}
+
+		// Show source selector if multiple sources available
+		case "s":
+			if m.currentWindow == 1 && len(m.logs) > 0 && len(m.logs[m.logTable.Cursor()].Sources) > 1 {
+				m.showSourceSelector = true
+				m.currentWindow = 2
+			}
+
+		// Apply source to similar logs
+		case "a":
+			if m.currentWindow == 2 && m.showSourceSelector {
+				m.applySourceToSimilarLogs()
+				m.showSourceSelector = false
+				m.currentWindow = 1
+			}
+
+		// Escape from source selector
+		case "esc":
+			if m.currentWindow == 2 {
+				m.showSourceSelector = false
 				m.currentWindow = 1
 			}
 
@@ -96,40 +158,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return nil, tea.Quit
 				}
 				m.logTable.SetRows(slices.Delete(m.logTable.Rows(), m.logTable.Cursor(), m.logTable.Cursor()+1))
-				// os.OpenFile(m.logs[m.logTable.Cursor()].Sources[0].Path)
-				m.sourcesView.SetContent("DLETE")
-
-			}
-
-		// Open log info or source in user's editor
-		case "o", "enter":
-			// Open Log
-			if m.currentWindow == 0 {
-
-			}
-			// Open Source code
-			if m.currentWindow == 1 {
-				editor := os.Getenv("EDITOR")
-				if editor == "" {
-					editor = "code"
-				}
-
-				var cmd *exec.Cmd
-
-				if editor == "vim" || editor == "nvim" {
-					cmd = exec.Command(editor, m.logs[m.logTable.Cursor()].Sources[0].Path, "+", fmt.Sprintf("%d", m.logs[m.logTable.Cursor()].Sources[0].Line))
-					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
-				} else {
-					cmd = exec.Command(editor, m.logs[m.logTable.Cursor()].Sources[0].Path, "-g", fmt.Sprintf("%d", m.logs[m.logTable.Cursor()].Sources[0].Line))
-				}
-
-				if err := cmd.Run(); err != nil {
-					bus.LogChannel <- fmt.Sprintf("Error opening source code: %v", err)
-				} else {
-					bus.LogChannel <- "Source code opened successfully"
-				}
+				m.updateSourceSelector()
 			}
 
 		// Quit
@@ -140,6 +169,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.x, m.y = msg.Width, msg.Height
+		m.sourcesView.Width = m.getSourcesViewWidth()
+		m.sourcesView.Height = m.y - 3
 	}
 
 	return m, cmd
@@ -188,16 +219,51 @@ func (m Model) View() string {
 	if m.progress < 100 {
 		return renderPrettySpinner(m)
 	}
-	var s string
+	
 	header := keywordStyle.Render("VLSA - Visual Log Source Analyzer")
-
-	if m.currentWindow == 0 {
-		s += lipgloss.JoinVertical(lipgloss.Top, header, lipgloss.JoinHorizontal(lipgloss.Top, focusedWindowStyle.Render(renderLogs(m)), modelStyle.Render(renderSources(m))))
+	
+	// Render based on whether source selector is shown
+	if m.showSourceSelector {
+		// Three-pane layout
+		var logsPane, sourcesPane, selectorPane string
+		
+		if m.currentWindow == 0 {
+			logsPane = focusedWindowStyle.Render(renderLogs(m))
+		} else {
+			logsPane = modelStyle.Render(renderLogs(m))
+		}
+		
+		if m.currentWindow == 1 {
+			sourcesPane = focusedWindowStyle.Render(renderSources(m))
+		} else {
+			sourcesPane = modelStyle.Render(renderSources(m))
+		}
+		
+		if m.currentWindow == 2 {
+			selectorPane = focusedWindowStyle.Render(renderSourceSelector(m))
+		} else {
+			selectorPane = modelStyle.Render(renderSourceSelector(m))
+		}
+		
+		return lipgloss.JoinVertical(lipgloss.Top, 
+			header, 
+			lipgloss.JoinHorizontal(lipgloss.Top, logsPane, sourcesPane, selectorPane))
 	} else {
-		s += lipgloss.JoinVertical(lipgloss.Top, header, lipgloss.JoinHorizontal(lipgloss.Top, modelStyle.Render(renderLogs(m)), focusedWindowStyle.Render(renderSources(m))))
+		// Two-pane layout (original)
+		var logsPane, sourcesPane string
+		
+		if m.currentWindow == 0 {
+			logsPane = focusedWindowStyle.Render(renderLogs(m))
+			sourcesPane = modelStyle.Render(renderSources(m))
+		} else {
+			logsPane = modelStyle.Render(renderLogs(m))
+			sourcesPane = focusedWindowStyle.Render(renderSources(m))
+		}
+		
+		return lipgloss.JoinVertical(lipgloss.Top, 
+			header, 
+			lipgloss.JoinHorizontal(lipgloss.Top, logsPane, sourcesPane))
 	}
-
-	return s
 }
 
 func renderPrettySpinner(m Model) string {
@@ -215,23 +281,73 @@ func renderPrettySpinner(m Model) string {
 }
 
 func renderLogs(m Model) string {
-	m.logTable.SetWidth((m.x / 2) - 2)
+	width := (m.x / 2) - 2
+	if m.showSourceSelector {
+		width = (m.x / 3) - 2
+	}
+	
+	m.logTable.SetWidth(width)
 	m.logTable.SetHeight(m.y - 4)
 
-	lw := m.x / 2
 	columns := []table.Column{
 		{Title: "Timestamp", Width: 20},
-		{Title: "Log", Width: lw - 20},
+		{Title: "Log", Width: width - 22},
 	}
 	m.logTable.SetColumns(columns)
 	return m.logTable.View() + "\n"
 }
 
 func renderSources(m Model) string {
-	m.sourcesView.Width = (m.x / 2) - 2
+	width := m.getSourcesViewWidth()
+	m.sourcesView.Width = width
 	m.sourcesView.Height = m.y - 4
-	m.sourcesView.SetContent(setSourceCodeView(m.logs[m.logTable.Cursor()].Sources[0].SourceCode, m.logs[m.logTable.Cursor()].Sources[0].Line, m.y-4))
+	
+	if len(m.logs) == 0 || m.logTable.Cursor() >= len(m.logs) {
+		m.sourcesView.SetContent("No logs available")
+		return m.sourcesView.View()
+	}
+	
+	currentLog := m.logs[m.logTable.Cursor()]
+	if len(currentLog.Sources) == 0 {
+		m.sourcesView.SetContent("No source code available")
+		return m.sourcesView.View()
+	}
+	
+	// Use the log's selected source index, default to 0
+	sourceIdx := currentLog.SelectedSourceIdx
+	if sourceIdx >= len(currentLog.Sources) {
+		sourceIdx = 0
+	}
+	
+	source := currentLog.Sources[sourceIdx]
+	content := setSourceCodeView(source.SourceCode, source.Line, m.y-4)
+	
+	// Add header showing current source
+	header := fmt.Sprintf("Source: %s:%d", source.Path, source.Line)
+	if len(currentLog.Sources) > 1 {
+		header += fmt.Sprintf(" (%d of %d sources - press 's' to select)", sourceIdx+1, len(currentLog.Sources))
+	}
+	content = subtleStyle.Render(header) + "\n" + content
+	
+	m.sourcesView.SetContent(content)
 	return m.sourcesView.View()
+}
+
+func renderSourceSelector(m Model) string {
+	if !m.showSourceSelector {
+		return ""
+	}
+	
+	width := (m.x / 3) - 2
+	height := m.y - 4
+	
+	m.sourceSelector.SetWidth(width)
+	m.sourceSelector.SetHeight(height)
+	
+	// Add instructions at the bottom
+	instructions := subtleStyle.Render("↑↓: Navigate • Enter: Select • A: Apply to similar • Esc: Cancel")
+	
+	return m.sourceSelector.View() + "\n" + instructions
 }
 
 func setSourceCodeView(sourceCode string, line, height int) string {
@@ -256,4 +372,119 @@ func setSourceCodeView(sourceCode string, line, height int) string {
 		s += strings.Join(lines[line:end], "\n")
 		return s
 	}
+}
+
+// Helper methods for Model
+
+func (m *Model) updateSourceSelector() {
+	if len(m.logs) == 0 || m.logTable.Cursor() >= len(m.logs) {
+		return
+	}
+	
+	currentLog := m.logs[m.logTable.Cursor()]
+	if len(currentLog.Sources) <= 1 {
+		m.showSourceSelector = false
+		return
+	}
+
+	// Create list items for source selector
+	var items []list.Item
+	for i, source := range currentLog.Sources {
+		items = append(items, SourceItem{
+			path: source.Path,
+			line: source.Line,
+			idx:  i,
+		})
+	}
+
+	m.sourceSelector = list.New(items, list.NewDefaultDelegate(), 0, 0)
+	m.sourceSelector.Title = "Multiple Sources Available"
+	m.sourceSelector.SetShowStatusBar(false)
+	m.sourceSelector.SetFilteringEnabled(false)
+}
+
+func (m *Model) getSourcesViewWidth() int {
+	if m.showSourceSelector {
+		return (m.x / 3) - 2 // Three pane layout
+	}
+	return (m.x / 2) - 2 // Two pane layout
+}
+
+func (m *Model) nextWindow() {
+	maxWindow := 1
+	if m.showSourceSelector {
+		maxWindow = 2
+	}
+	
+	m.currentWindow = (m.currentWindow + 1) % (maxWindow + 1)
+}
+
+func (m *Model) prevWindow() {
+	maxWindow := 1
+	if m.showSourceSelector {
+		maxWindow = 2
+	}
+	
+	m.currentWindow = (m.currentWindow - 1 + maxWindow + 1) % (maxWindow + 1)
+}
+
+func (m *Model) openCurrentSourceInEditor() {
+	if len(m.logs) == 0 || m.logTable.Cursor() >= len(m.logs) {
+		return
+	}
+	
+	currentLog := m.logs[m.logTable.Cursor()]
+	if len(currentLog.Sources) == 0 {
+		return
+	}
+	
+	// Use the log's selected source index
+	sourceIdx := currentLog.SelectedSourceIdx
+	if sourceIdx >= len(currentLog.Sources) {
+		sourceIdx = 0
+	}
+	
+	source := currentLog.Sources[sourceIdx]
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "code"
+	}
+
+	var cmd *exec.Cmd
+	if editor == "vim" || editor == "nvim" {
+		cmd = exec.Command(editor, source.Path, "+", fmt.Sprintf("%d", source.Line))
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd = exec.Command(editor, source.Path, "-g", fmt.Sprintf("%d", source.Line))
+	}
+
+	if err := cmd.Run(); err != nil {
+		bus.LogChannel <- fmt.Sprintf("Error opening source code: %v", err)
+	} else {
+		bus.LogChannel <- "Source code opened successfully"
+	}
+}
+
+func (m *Model) applySourceToSimilarLogs() {
+	if len(m.logs) == 0 || m.logTable.Cursor() >= len(m.logs) {
+		return
+	}
+	
+	currentLog := m.logs[m.logTable.Cursor()]
+	currentMessage := currentLog.Message
+	selectedSourceIdx := currentLog.SelectedSourceIdx
+	
+	// Find all logs with the same message and update their selected source
+	count := 0
+	for i := range m.logs {
+		if m.logs[i].Message == currentMessage && len(m.logs[i].Sources) > selectedSourceIdx {
+			// Update the selected source index for similar logs
+			m.logs[i].SelectedSourceIdx = selectedSourceIdx
+			count++
+		}
+	}
+	
+	bus.LogChannel <- fmt.Sprintf("Applied source selection to %d similar logs", count)
 }
