@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VLSA - Visual Log Source Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>VLSA - Visual Log Source Analyzer</h1>
+    </header>
+
+    <main>
+        <!-- File Upload Section -->
+        <section id="upload-section">
+            <form id="upload-form" enctype="multipart/form-data">
+                <div class="upload-area">
+                    <input type="file" id="logfile" name="logfile" accept=".csv,.log,.txt" required>
+                    <label for="logfile">Choose log file (CSV or plain text)</label>
+                    <button type="submit" id="upload-btn">Upload & Process</button>
+                </div>
+            </form>
+            <div id="upload-status" class="status-message"></div>
+        </section>
+
+        <!-- Main Interface -->
+        <section id="main-interface" class="hidden">
+            <div class="panes">
+                <!-- Left Pane: Logs Table -->
+                <div class="pane logs-pane">
+                    <div class="pane-header">
+                        <h2>Logs</h2>
+                        <span id="log-count" class="count"></span>
+                    </div>
+                    <div class="table-container">
+                        <table id="logs-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Service</th>
+                                    <th>Message</th>
+                                    <th>Sources</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="logs-tbody">
+                                <!-- Logs will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Right Pane: Source Code -->
+                <div class="pane source-pane">
+                    <div class="pane-header">
+                        <h2>Source Code</h2>
+                        <div class="source-controls">
+                            <select id="source-selector" class="hidden">
+                                <!-- Source options will be populated here -->
+                            </select>
+                            <span id="source-info"></span>
+                        </div>
+                    </div>
+                    <div class="source-container">
+                        <pre id="source-code"><code>Select a log entry to view source code</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

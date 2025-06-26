@@ -1,0 +1,1 @@
+It's not used the browser, using the browser is inefficient. If you need something to be tested through the browser, ask me and I will do it myself.

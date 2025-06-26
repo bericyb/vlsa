@@ -36,18 +36,38 @@ func ProcessLogs(fp string, uChan chan LogProcessingMsg) {
 	// If a log file is provided, open it and read the logs
 	file, err := os.Open(fp)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening log file: %v\n", err)
-		os.Exit(1)
+		bus.LogChannel <- fmt.Sprintf("Error opening log file: %v", err)
+		uChan <- LogProcessingMsg{
+			Progress: 100,
+			Logs:     []Log{},
+			Error:    fmt.Sprintf("Error opening log file: %v", err),
+		}
+		close(uChan)
+		return
 	}
 	defer file.Close()
 
 	// If the file is a csv, parse it out with the csv package else, just plain text
-	logs := []Log{}
+	var logs []Log
+	var parseErr error
 	if fp[len(fp)-4:] == ".csv" {
-		logs = parseCSVLogs(file)
+		logs, parseErr = parseCSVLogsWithError(file)
 	} else {
-		logs = parsePlainTextLogs(file)
+		logs, parseErr = parsePlainTextLogsWithError(file)
 	}
+
+	if parseErr != nil {
+		bus.LogChannel <- fmt.Sprintf("Error parsing log file: %v", parseErr)
+		uChan <- LogProcessingMsg{
+			Progress: 100,
+			Logs:     []Log{},
+			Error:    fmt.Sprintf("Error parsing log file: %v", parseErr),
+		}
+		close(uChan)
+		return
+	}
+
+	bus.LogChannel <- fmt.Sprintf("Successfully parsed %d logs", len(logs))
 
 	// Map sources to logs
 	for i := range logs {
@@ -99,6 +119,42 @@ func parseCSVLogs(file *os.File) []Log {
 	}
 
 	return logs
+}
+
+func parseCSVLogsWithError(file *os.File) ([]Log, error) {
+	// Parse CSV file
+	logs := []Log{}
+	csvReader := csv.NewReader(file)
+	records, err := csvReader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("error reading CSV file: %v", err)
+	}
+
+	for _, record := range records {
+		if len(record) < 4 {
+			continue // Skip malformed lines
+		}
+
+		// Time is provided as 2025-06-19T03:40:54.794Z
+		time, err := time.Parse("2006-01-02T15:04:05.000Z", record[0])
+		if err != nil {
+			continue
+		}
+		l := Log{
+			Time:    time,
+			Service: record[2],
+			Message: record[3],
+			Sources: []SourceMapping{}, // Sources are added later
+		}
+
+		logs = append(logs, l)
+	}
+
+	return logs, nil
+}
+
+func parsePlainTextLogsWithError(file *os.File) ([]Log, error) {
+	return nil, fmt.Errorf("plain text log parsing not implemented yet")
 }
 
 func parsePlainTextLogs(file *os.File) []Log {
@@ -267,4 +323,5 @@ func parseRGOutput(lines string) []SourceMapping {
 type LogProcessingMsg struct {
 	Progress int
 	Logs     []Log
+	Error    string
 }
